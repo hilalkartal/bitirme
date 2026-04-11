@@ -1,4 +1,4 @@
-package com.bitirme.demo_bitirme.data;
+package com.bitirme.demo_bitirme.data.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -13,7 +13,7 @@ import lombok.Setter;
 @AllArgsConstructor
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public class GPSAddress {
+public class GPSAddressDTO {
     private String road;
     private String city;
     private String county;
