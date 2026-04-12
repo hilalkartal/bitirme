@@ -1,0 +1,234 @@
+databaseChangeLog:
+  - changeSet:
+      id: 1
+      author: bitirme
+      changes:
+        - createTable:
+            tableName: photo
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: file_name
+                  type: VARCHAR(255)
+              - column:
+                  name: file_path
+                  type: VARCHAR(500)
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+        - sql:
+            sql: ALTER TABLE photo MODIFY updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;
+
+  - changeSet:
+      id: 2
+      author: bitirme
+      changes:
+        - createTable:
+            tableName: exif_data
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: photo_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: camera_make
+                  type: VARCHAR(100)
+              - column:
+                  name: camera_model
+                  type: VARCHAR(100)
+              - column:
+                  name: iso
+                  type: INT
+              - column:
+                  name: aperture
+                  type: DECIMAL(5, 2)
+              - column:
+                  name: exposure_time
+                  type: VARCHAR(50)
+              - column:
+                  name: focal_length
+                  type: DECIMAL(8, 2)
+              - column:
+                  name: date_taken
+                  type: TIMESTAMP
+              - column:
+                  name: orientation
+                  type: INT
+        - addForeignKeyConstraint:
+            constraintName: fk_exif_photo
+            baseTableName: exif_data
+            baseColumnNames: photo_id
+            referencedTableName: photo
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - createIndex:
+            indexName: idx_exif_photo_id
+            tableName: exif_data
+            columns:
+              - column:
+                  name: photo_id
+
+  - changeSet:
+      id: 3
+      author: bitirme
+      changes:
+        - createTable:
+            tableName: gps_data
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: photo_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: latitude
+                  type: DECIMAL(10, 8)
+              - column:
+                  name: longitude
+                  type: DECIMAL(11, 8)
+              - column:
+                  name: altitude
+                  type: DECIMAL(10, 2)
+              - column:
+                  name: country
+                  type: VARCHAR(100)
+              - column:
+                  name: city
+                  type: VARCHAR(100)
+              - column:
+                  name: google_maps_link
+                  type: VARCHAR(500)
+        - addForeignKeyConstraint:
+            constraintName: fk_gps_photo
+            baseTableName: gps_data
+            baseColumnNames: photo_id
+            referencedTableName: photo
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - createIndex:
+            indexName: idx_gps_photo_id
+            tableName: gps_data
+            columns:
+              - column:
+                  name: photo_id
+
+  - changeSet:
+      id: 4
+      author: bitirme
+      changes:
+        - createTable:
+            tableName: tag
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: name
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: tag_type
+                  type: ENUM('FACE', 'PLACE', 'CAMERA', 'CUSTOM')
+                  constraints:
+                    nullable: false
+              - column:
+                  name: source
+                  type: ENUM('SYSTEM', 'MANUAL')
+                  defaultValue: MANUAL
+                  constraints:
+                    nullable: false
+        - addUniqueConstraint:
+            constraintName: uk_tag_name_type
+            tableName: tag
+            columnNames: name,tag_type,source
+        - createIndex:
+            indexName: idx_tag_type
+            tableName: tag
+            columns:
+              - column:
+                  name: tag_type
+
+  - changeSet:
+      id: 5
+      author: bitirme
+      changes:
+        - createTable:
+            tableName: photo_tag
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: photo_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: tag_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: confidence_score
+                  type: DECIMAL(3, 2)
+        - addForeignKeyConstraint:
+            constraintName: fk_photo_tag_photo
+            baseTableName: photo_tag
+            baseColumnNames: photo_id
+            referencedTableName: photo
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - addForeignKeyConstraint:
+            constraintName: fk_photo_tag_tag
+            baseTableName: photo_tag
+            baseColumnNames: tag_id
+            referencedTableName: tag
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - createIndex:
+            indexName: idx_photo_tag_photo_id
+            tableName: photo_tag
+            columns:
+              - column:
+                  name: photo_id
+        - createIndex:
+            indexName: idx_photo_tag_tag_id
+            tableName: photo_tag
+            columns:
+              - column:
+                  name: tag_id
