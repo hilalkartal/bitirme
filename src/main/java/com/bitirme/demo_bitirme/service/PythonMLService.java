@@ -34,6 +34,50 @@ public class PythonMLService {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /**
+     * Notifies the Python ML service that a FACE tag has been renamed.
+     * Python will update persons.display_name so future uploads use
+     * the correct user-chosen name instead of the stale "Person N".
+     *
+     * Fire-and-forget: failures are logged but do not affect the rename response.
+     *
+     * @param oldName the previous tag name (e.g. "Person 2")
+     * @param newName the new tag name (e.g. "Selin")
+     */
+    @Async
+    public void renamePersonAsync(String oldName, String newName) {
+        try {
+            String body = MAPPER.writeValueAsString(Map.of(
+                    "old_name", oldName,
+                    "new_name", newName
+            ));
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(pythonApiUrl + "/rename-person"))
+                    .timeout(Duration.ofSeconds(10))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(body))
+                    .build();
+
+            log.info("Notifying Python ML service of person rename: '{}' → '{}'", oldName, newName);
+            HttpResponse<String> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() == 200) {
+                log.info("Python ML service confirmed rename: {}", response.body());
+            } else {
+                log.warn("Python ML service returned {} for rename '{}' → '{}': {}",
+                        response.statusCode(), oldName, newName, response.body());
+            }
+
+        } catch (java.net.ConnectException e) {
+            log.warn("Python ML service unreachable during rename '{}' → '{}'. " +
+                     "Person display_name may be out of sync until service restarts.", oldName, newName);
+        } catch (Exception e) {
+            log.error("Failed to notify Python ML service of rename '{}' → '{}': {}",
+                    oldName, newName, e.getMessage(), e);
+        }
+    }
+
+    /**
      * Asynchronously sends the photo to the Python /analyze-photo endpoint.
      * Runs in a separate thread so it does not delay the upload response.
      *

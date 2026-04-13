@@ -4,6 +4,7 @@ import com.bitirme.demo_bitirme.data.dto.TagDTO;
 import com.bitirme.demo_bitirme.data.entity.Tag;
 import com.bitirme.demo_bitirme.data.mapper.TagMapper;
 import com.bitirme.demo_bitirme.repository.TagRepository;
+import com.bitirme.demo_bitirme.service.PythonMLService;
 import com.bitirme.demo_bitirme.util.response.ApiResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,6 +24,7 @@ public class TagController {
 
     private final TagRepository tagRepository;
     private final TagMapper tagMapper;
+    private final PythonMLService pythonMLService;
 
     /**
      * Rename a tag globally (affects all photos using this tag).
@@ -54,9 +56,18 @@ public class TagController {
                     "A tag named '" + finalNewName + "' already exists for this type");
         }
 
+        String oldName = tag.getName();
         tag.setName(newName);
         Tag saved = tagRepository.save(tag);
-        log.info("Renamed tag {} to '{}' (type={}, source={})", tagId, newName, saved.getTagType(), saved.getSource());
+        log.info("Renamed tag {} from '{}' to '{}' (type={}, source={})",
+                tagId, oldName, newName, saved.getTagType(), saved.getSource());
+
+        // If this is a FACE tag, keep Python's persons table in sync so that
+        // future uploads post the correct user-chosen name (e.g. "Selin")
+        // instead of the stale auto-generated name (e.g. "Person 2").
+        if (saved.getTagType() == Tag.TagType.FACE) {
+            pythonMLService.renamePersonAsync(oldName, newName);
+        }
 
         return ResponseEntity.ok(ApiResponse.success("Tag renamed", tagMapper.toTagDTO(saved)));
     }
