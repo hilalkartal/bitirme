@@ -232,3 +232,143 @@ databaseChangeLog:
             columns:
               - column:
                   name: tag_id
+
+  - changeSet:
+      id: 6
+      author: bitirme
+      comment: "Persons table - stores one row per recognised person (face cluster centroid)"
+      changes:
+        - createTable:
+            tableName: persons
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: display_name
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: centroid_embedding
+                  type: LONGBLOB
+                  constraints:
+                    nullable: true
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+        - addUniqueConstraint:
+            constraintName: uq_persons_display_name
+            tableName: persons
+            columnNames: display_name
+
+  - changeSet:
+      id: 7
+      author: bitirme
+      comment: "Faces table - one row per detected face in a photo; references photo.id"
+      changes:
+        - createTable:
+            tableName: faces
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: photo_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: face_index
+                  type: INT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: x1
+                  type: INT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: y1
+                  type: INT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: x2
+                  type: INT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: y2
+                  type: INT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: det_score
+                  type: FLOAT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: embedding
+                  type: LONGBLOB
+                  constraints:
+                    nullable: false
+              - column:
+                  name: cluster_id
+                  type: INT
+                  constraints:
+                    nullable: true
+              - column:
+                  name: person_id
+                  type: BIGINT
+                  constraints:
+                    nullable: true
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+        - addUniqueConstraint:
+            constraintName: uq_face_per_photo
+            tableName: faces
+            columnNames: photo_id,face_index
+        - addForeignKeyConstraint:
+            constraintName: fk_faces_photo
+            baseTableName: faces
+            baseColumnNames: photo_id
+            referencedTableName: photo
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - addForeignKeyConstraint:
+            constraintName: fk_faces_person
+            baseTableName: faces
+            baseColumnNames: person_id
+            referencedTableName: persons
+            referencedColumnNames: id
+            onDelete: SET NULL
+        - createIndex:
+            indexName: idx_faces_photo_id
+            tableName: faces
+            columns:
+              - column:
+                  name: photo_id
+        - createIndex:
+            indexName: idx_faces_person_id
+            tableName: faces
+            columns:
+              - column:
+                  name: person_id
+        - createIndex:
+            indexName: idx_faces_cluster_id
+            tableName: faces
+            columns:
+              - column:
+                  name: cluster_id

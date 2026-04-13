@@ -4,17 +4,20 @@ import com.bitirme.demo_bitirme.config.UploadConfig;
 import com.bitirme.demo_bitirme.data.dto.EXIFDataDTO;
 import com.bitirme.demo_bitirme.data.dto.GPSDataDTO;
 import com.bitirme.demo_bitirme.data.dto.PhotoDTO;
-import com.bitirme.demo_bitirme.data.entity.ExifData;
-import com.bitirme.demo_bitirme.data.entity.GpsData;
-import com.bitirme.demo_bitirme.data.entity.Photo;
+import com.bitirme.demo_bitirme.data.dto.UpdatePhotoRequest;
+import com.bitirme.demo_bitirme.data.entity.*;
 import com.bitirme.demo_bitirme.data.mapper.PhotoMapper;
+import com.bitirme.demo_bitirme.data.mapper.PhotoTagMapper;
 import com.bitirme.demo_bitirme.exception.ExifExtractionException;
 import com.bitirme.demo_bitirme.exception.FileStorageException;
 import com.bitirme.demo_bitirme.exception.PhotoNotFoundException;
 import com.bitirme.demo_bitirme.exception.PhotoUploadException;
+import com.bitirme.demo_bitirme.data.dto.PhotoTagDTO;
 import com.bitirme.demo_bitirme.repository.ExifDataRepository;
 import com.bitirme.demo_bitirme.repository.GpsDataRepository;
 import com.bitirme.demo_bitirme.repository.PhotoRepository;
+import com.bitirme.demo_bitirme.repository.PhotoTagRepository;
+import com.bitirme.demo_bitirme.repository.TagRepository;
 import com.bitirme.demo_bitirme.util.ExifExtractor;
 import com.bitirme.demo_bitirme.util.ReverseGeocoder;
 import lombok.RequiredArgsConstructor;
@@ -48,10 +51,14 @@ public class PhotoService {
     private final PhotoRepository photoRepository;
     private final ExifDataRepository exifDataRepository;
     private final GpsDataRepository gpsDataRepository;
+    private final TagRepository tagRepository;
+    private final PhotoTagRepository photoTagRepository;
     private final PhotoMapper photoMapper;
+    private final PhotoTagMapper photoTagMapper;
     private final UploadConfig uploadConfig;
     private final ExifExtractor exifExtractor;
     private final ReverseGeocoder reverseGeocoder;
+    private final PythonMLService pythonMLService;
 
     /**
      * Upload a photo and extract EXIF/GPS metadata
@@ -95,6 +102,10 @@ public class PhotoService {
 
             log.info("Photo uploaded successfully with ID: {}", savedPhoto.getId());
 
+            // Trigger async ML analysis (person vs scenery → face tagging)
+            // Runs in background — upload response is not delayed.
+            pythonMLService.analyzePhotoAsync(savedPhoto.getId(), uploadPath.toString());
+
             return photoMapper.toPhotoDTO(savedPhoto);
 
 
@@ -121,6 +132,154 @@ public class PhotoService {
      */
     public Page<PhotoDTO> getAllPhotos(Pageable pageable) {
         return photoRepository.findAll(pageable).map(photoMapper::toPhotoDTO);
+    }
+
+    /**
+     * Add a tag to a photo.
+     * Source defaults to MANUAL; pass "SYSTEM" for auto-detected tags.
+     * Re-uses an existing tag row if one with the same name/type/source already exists.
+     * Returns the updated photo.
+     */
+    public PhotoDTO addTag(Long photoId, String tagName, String tagType, String source) {
+        Photo photo = photoRepository.findById(photoId)
+                .orElseThrow(() -> new PhotoNotFoundException("Photo not found with ID: " + photoId));
+
+        Tag.TagType type   = Tag.TagType.valueOf(tagType.toUpperCase());
+        Tag.TagSource src  = Tag.TagSource.valueOf(source != null ? source.toUpperCase() : "MANUAL");
+
+        // Find or create the Tag row
+        Tag tag = tagRepository
+                .findByNameAndTagTypeAndSource(tagName, type, src)
+                .orElseGet(() -> {
+                    Tag t = new Tag();
+                    t.setName(tagName);
+                    t.setTagType(type);
+                    t.setSource(src);
+                    return tagRepository.save(t);
+                });
+
+        // Avoid duplicates on the same photo
+        if (photoTagRepository.findByPhotoIdAndTagId(photoId, tag.getId()).isPresent()) {
+            log.debug("Tag '{}' already on photo {}", tagName, photoId);
+            return photoMapper.toPhotoDTO(photo);
+        }
+
+        PhotoTag photoTag = new PhotoTag();
+        photoTag.setPhoto(photo);
+        photoTag.setTag(tag);
+        photoTag.setConfidenceScore(java.math.BigDecimal.ONE);
+        photoTagRepository.save(photoTag);
+
+        log.info("Added {} tag '{}' ({}) to photo {}", src, tagName, tagType, photoId);
+        // Reload to get full associations
+        return photoMapper.toPhotoDTO(photoRepository.findById(photoId).orElseThrow());
+    }
+
+    /** Convenience overload for the manual-tag UI flow (source = MANUAL). */
+    public PhotoDTO addTag(Long photoId, String tagName, String tagType) {
+        return addTag(photoId, tagName, tagType, "MANUAL");
+    }
+
+    /**
+     * Remove a tag link from a photo (by PhotoTag id).
+     * Only MANUAL tags may be deleted this way.
+     */
+    public PhotoDTO removeTag(Long photoId, Long photoTagId) {
+        PhotoTag photoTag = photoTagRepository.findById(photoTagId)
+                .orElseThrow(() -> new RuntimeException("PhotoTag not found: " + photoTagId));
+
+        if (!photoTag.getPhoto().getId().equals(photoId)) {
+            throw new RuntimeException("PhotoTag does not belong to photo " + photoId);
+        }
+        if (photoTag.getTag().getSource() != Tag.TagSource.MANUAL) {
+            throw new RuntimeException("Only manually added tags can be removed");
+        }
+
+        photoTagRepository.delete(photoTag);
+        log.info("Removed tag {} from photo {}", photoTagId, photoId);
+        return photoMapper.toPhotoDTO(photoRepository.findById(photoId).orElseThrow());
+    }
+
+    /**
+     * Delete a photo and its file from disk
+     */
+    public void deletePhoto(Long id) {
+        Photo photo = photoRepository.findById(id)
+                .orElseThrow(() -> new PhotoNotFoundException("Photo not found with ID: " + id));
+
+        // Delete physical file from disk
+        try {
+            java.nio.file.Path filePath = java.nio.file.Paths.get(photo.getFilePath());
+            java.nio.file.Files.deleteIfExists(filePath);
+            log.info("Deleted file from disk: {}", photo.getFilePath());
+        } catch (Exception e) {
+            log.warn("Could not delete file from disk: {}", photo.getFilePath(), e);
+        }
+
+        photoRepository.delete(photo);
+        log.info("Deleted photo with ID: {}", id);
+    }
+
+    /**
+     * Update a photo's filename, EXIF data, and/or GPS data.
+     * Only non-null fields in the request are applied.
+     */
+    public PhotoDTO updatePhoto(Long id, UpdatePhotoRequest req) {
+        Photo photo = photoRepository.findById(id)
+                .orElseThrow(() -> new PhotoNotFoundException("Photo not found with ID: " + id));
+
+        // ── Filename ──────────────────────────────────────────────────
+        if (req.getFileName() != null && !req.getFileName().isBlank()) {
+            photo.setFileName(req.getFileName());
+        }
+
+        // ── EXIF data ─────────────────────────────────────────────────
+        if (req.getExifData() != null) {
+            UpdatePhotoRequest.ExifUpdate eu = req.getExifData();
+            ExifData exif = photo.getExifData();
+            if (exif == null) {
+                exif = new ExifData();
+                exif.setPhoto(photo);
+            }
+            if (eu.getCameraMake()  != null) exif.setCameraMake(eu.getCameraMake());
+            if (eu.getCameraModel() != null) exif.setCameraModel(eu.getCameraModel());
+            if (eu.getIso()         != null) exif.setIso(eu.getIso());
+            if (eu.getAperture()    != null) exif.setAperture(eu.getAperture());
+            if (eu.getExposureTime()!= null) exif.setExposureTime(eu.getExposureTime());
+            if (eu.getFocalLength() != null) exif.setFocalLength(eu.getFocalLength());
+            if (eu.getDateTaken()   != null) exif.setDateTaken(eu.getDateTaken());
+            if (eu.getOrientation() != null) exif.setOrientation(eu.getOrientation());
+            exifDataRepository.save(exif);
+            photo.setExifData(exif);
+        }
+
+        // ── GPS data ──────────────────────────────────────────────────
+        if (req.getGpsData() != null) {
+            UpdatePhotoRequest.GpsUpdate gu = req.getGpsData();
+            GpsData gps = photo.getGpsData();
+            if (gps == null) {
+                gps = new GpsData();
+                gps.setPhoto(photo);
+            }
+            if (gu.getLatitude()  != null) gps.setLatitude(gu.getLatitude());
+            if (gu.getLongitude() != null) gps.setLongitude(gu.getLongitude());
+            if (gu.getAltitude()  != null) gps.setAltitude(gu.getAltitude());
+
+            // Re-run reverse geocoding whenever coordinates change
+            if (gu.getLatitude() != null && gu.getLongitude() != null) {
+                gps.setGoogleMapsLink(reverseGeocoder.generateGoogleMapsLink(gps.getLatitude(), gps.getLongitude()));
+                String[] geo = reverseGeocoder.reverseGeocode(gps.getLatitude(), gps.getLongitude());
+                gps.setCountry(geo[0]);
+                gps.setCity(geo[1]);
+            }
+
+            gpsDataRepository.save(gps);
+            photo.setGpsData(gps);
+        }
+
+        Photo saved = photoRepository.save(photo);
+        log.info("Updated photo with ID: {}", id);
+        return photoMapper.toPhotoDTO(saved);
     }
 
     /**
@@ -263,4 +422,3 @@ public class PhotoService {
         }
     }
 }
-      
