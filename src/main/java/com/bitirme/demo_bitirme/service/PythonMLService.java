@@ -34,21 +34,20 @@ public class PythonMLService {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /**
-     * Notifies the Python ML service that a FACE tag has been renamed.
-     * Python will update persons.display_name so future uploads use
-     * the correct user-chosen name instead of the stale "Person N".
-     *
-     * Fire-and-forget: failures are logged but do not affect the rename response.
+     * Notifies the Python ML service that a FACE tag has been renamed for a specific user.
+     * The Python side should update its per-user label store, not the global person name.
      *
      * @param oldName the previous tag name (e.g. "Person 2")
-     * @param newName the new tag name (e.g. "Selin")
+     * @param newName the new tag name (e.g. "Mom")
+     * @param userId  which user's label was renamed
      */
     @Async
-    public void renamePersonAsync(String oldName, String newName) {
+    public void renamePersonForUserAsync(String oldName, String newName, Long userId) {
         try {
             String body = MAPPER.writeValueAsString(Map.of(
                     "old_name", oldName,
-                    "new_name", newName
+                    "new_name", newName,
+                    "user_id", userId
             ));
 
             HttpRequest request = HttpRequest.newBuilder()
@@ -58,22 +57,22 @@ public class PythonMLService {
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();
 
-            log.info("Notifying Python ML service of person rename: '{}' → '{}'", oldName, newName);
+            log.info("Notifying Python ML service of rename for user {}: '{}' → '{}'", userId, oldName, newName);
             HttpResponse<String> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() == 200) {
                 log.info("Python ML service confirmed rename: {}", response.body());
             } else {
-                log.warn("Python ML service returned {} for rename '{}' → '{}': {}",
-                        response.statusCode(), oldName, newName, response.body());
+                log.warn("Python ML service returned {} for rename '{}' → '{}' (user {}): {}",
+                        response.statusCode(), oldName, newName, userId, response.body());
             }
 
         } catch (java.net.ConnectException e) {
-            log.warn("Python ML service unreachable during rename '{}' → '{}'. " +
-                     "Person display_name may be out of sync until service restarts.", oldName, newName);
+            log.warn("Python ML service unreachable during rename '{}' → '{}' (user {}).",
+                    oldName, newName, userId);
         } catch (Exception e) {
-            log.error("Failed to notify Python ML service of rename '{}' → '{}': {}",
-                    oldName, newName, e.getMessage(), e);
+            log.error("Failed to notify Python ML service of rename '{}' → '{}' (user {}): {}",
+                    oldName, newName, userId, e.getMessage(), e);
         }
     }
 
@@ -83,13 +82,15 @@ public class PythonMLService {
      *
      * @param photoId  Spring Boot photo ID (used by Python to post tags back)
      * @param filePath Absolute path to the saved image on disk
+     * @param ownerUserId the user who owns this photo — Python posts SYSTEM tags back on their behalf
      */
     @Async
-    public void analyzePhotoAsync(Long photoId, String filePath) {
+    public void analyzePhotoAsync(Long photoId, String filePath, Long ownerUserId) {
         try {
             String body = MAPPER.writeValueAsString(Map.of(
                     "photo_id", photoId,
-                    "file_path", filePath
+                    "file_path", filePath,
+                    "owner_user_id", ownerUserId
             ));
 
             HttpRequest request = HttpRequest.newBuilder()

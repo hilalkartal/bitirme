@@ -9,6 +9,7 @@ import org.mapstruct.Mapping;
 public interface PhotoTagMapper {
 
     @Mapping(target = "photo", ignore = true)
+    @Mapping(target = "addedBy", ignore = true)
     @Mapping(target = "tag", source = "tag")
     PhotoTag toPhotoTag(PhotoTagDTO dto);
 

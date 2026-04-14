@@ -11,10 +11,12 @@ public interface PhotoMapper {
     @Mapping(target = "exifData", source = "exifData")
     @Mapping(target = "gpsData", source = "gpsData")
     @Mapping(target = "photoTags", source = "photoTags")
+    @Mapping(target = "owner", ignore = true)
     Photo toPhoto(PhotoDTO dto);
 
     @Mapping(target = "exifData", source = "exifData")
     @Mapping(target = "gpsData", source = "gpsData")
     @Mapping(target = "photoTags", source = "photoTags")
+    @Mapping(target = "ownerUserId", source = "owner.id")
     PhotoDTO toPhotoDTO(Photo entity);
 }

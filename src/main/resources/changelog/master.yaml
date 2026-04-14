@@ -1,3 +1,5 @@
 databaseChangeLog:
   - include:
       file: changelog/db-changelog-complete-schema.yaml
+  - include:
+      file: changelog/db-changelog-users-albums.yaml

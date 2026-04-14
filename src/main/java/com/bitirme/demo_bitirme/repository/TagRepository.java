@@ -10,9 +10,10 @@ import java.util.Optional;
 @Repository
 public interface TagRepository extends JpaRepository<Tag, Long> {
 
-    /** Find an existing tag by its unique composite key (name + type + source). */
-    Optional<Tag> findByNameAndTagTypeAndSource(String name, Tag.TagType tagType, Tag.TagSource source);
+    /** Find an existing tag by its unique composite key (name + type + source + user). */
+    Optional<Tag> findByNameAndTagTypeAndSourceAndUserId(
+            String name, Tag.TagType tagType, Tag.TagSource source, Long userId);
 
-    /** Search tags by partial name across all types — case-insensitive. */
-    List<Tag> findByNameContainingIgnoreCaseOrderByTagTypeAscNameAsc(String name);
+    /** Search tags belonging to a specific user by partial name — case-insensitive. */
+    List<Tag> findByUserIdAndNameContainingIgnoreCaseOrderByTagTypeAscNameAsc(Long userId, String name);
 }

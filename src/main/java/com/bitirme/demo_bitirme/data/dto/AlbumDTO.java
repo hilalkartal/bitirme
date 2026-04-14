@@ -10,17 +10,14 @@ import java.util.List;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-public class PhotoDTO {
+public class AlbumDTO {
     private Long id;
-    private String fileName;
-    private String filePath;
+    private String name;
+    private String description;
+    private String albumType;            // PRIVATE / COLLABORATIVE
+    private UserDTO owner;
+    private List<UserDTO> collaborators; // may be empty
+    private int photoCount;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
-    private long size;
-
-    private Long ownerUserId;
-
-    private EXIFDataDTO exifData;
-    private GPSDataDTO gpsData;
-    private List<PhotoTagDTO> photoTags;
 }

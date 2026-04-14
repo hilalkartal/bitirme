@@ -31,6 +31,10 @@ public class Photo {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "owner_user_id", nullable = false)
+    private AppUser owner;
+
     @OneToOne(mappedBy = "photo", cascade = CascadeType.ALL, orphanRemoval = true)
     private ExifData exifData;
 

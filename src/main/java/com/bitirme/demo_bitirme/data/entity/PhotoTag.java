@@ -26,6 +26,10 @@ public class PhotoTag {
     @JoinColumn(name = "tag_id", nullable = false)
     private Tag tag;
 
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "added_by_user_id", nullable = false)
+    private AppUser addedBy;
+
     @Column(name = "confidence_score")
     private BigDecimal confidenceScore;
 }

@@ -9,7 +9,7 @@ import java.util.List;
 
 @Entity
 @Table(name = "tag", uniqueConstraints = {
-    @UniqueConstraint(columnNames = {"name", "tag_type", "source"})
+    @UniqueConstraint(columnNames = {"name", "tag_type", "source", "user_id"})
 })
 @Setter
 @Getter
@@ -30,6 +30,10 @@ public class Tag {
     @Enumerated(EnumType.STRING)
     @Column(name = "source", nullable = false)
     private TagSource source;
+
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "user_id", nullable = false)
+    private AppUser user;
 
     @OneToMany(mappedBy = "tag", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<PhotoTag> photoTags;

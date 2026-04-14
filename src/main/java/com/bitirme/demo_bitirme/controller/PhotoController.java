@@ -1,5 +1,6 @@
 package com.bitirme.demo_bitirme.controller;
 
+import com.bitirme.demo_bitirme.config.CurrentUserId;
 import com.bitirme.demo_bitirme.data.dto.PhotoDTO;
 import com.bitirme.demo_bitirme.data.dto.UpdatePhotoRequest;
 import com.bitirme.demo_bitirme.service.PhotoService;
@@ -22,103 +23,81 @@ public class PhotoController {
 
     private final PhotoService photoService;
 
-    /**
-     * Upload a new photo
-     * POST /photos/upload
-     */
     @PostMapping(value = "/upload", consumes = "multipart/form-data")
-    public ResponseEntity<ApiResponse<Long>> uploadPhoto(@RequestParam("file") MultipartFile file) {
-        log.info("Received photo upload request: {}", file.getOriginalFilename());
-        PhotoDTO uploadedPhoto = photoService.uploadPhoto(file);
+    public ResponseEntity<ApiResponse<Long>> uploadPhoto(@RequestParam("file") MultipartFile file,
+                                                         @CurrentUserId Long userId) {
+        log.info("Received photo upload request: {} (user={})", file.getOriginalFilename(), userId);
+        PhotoDTO uploadedPhoto = photoService.uploadPhoto(file, userId);
         return ResponseEntity.status(HttpStatus.CREATED).body(
                 ApiResponse.success("Photo uploaded successfully", uploadedPhoto.getId())
         );
     }
 
-    /**
-     * Get photo by ID
-     * GET /photos/{id}
-     */
     @GetMapping("/{id}")
-    public ResponseEntity<ApiResponse<PhotoDTO>> getPhotoById(@PathVariable Long id) {
-        log.info("Retrieving photo with ID: {}", id);
-        PhotoDTO photo = photoService.getPhotoById(id);
-        return ResponseEntity.ok(
-                ApiResponse.success("Photo retrieved successfully", photo)
-        );
+    public ResponseEntity<ApiResponse<PhotoDTO>> getPhotoById(@PathVariable Long id,
+                                                              @CurrentUserId Long userId) {
+        PhotoDTO photo = photoService.getPhotoById(id, userId);
+        return ResponseEntity.ok(ApiResponse.success("Photo retrieved successfully", photo));
     }
 
-    /**
-     * Get all photos with pagination
-     * GET /photos?page=0&size=10
-     */
     @GetMapping
     public ResponseEntity<ApiResponse<Page<PhotoDTO>>> getAllPhotos(
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "10") int size) {
-        log.info("Retrieving all photos - page: {}, size: {}", page, size);
+            @RequestParam(defaultValue = "10") int size,
+            @CurrentUserId Long userId) {
         Pageable pageable = PageRequest.of(page, size);
-        Page<PhotoDTO> photos = photoService.getAllPhotos(pageable);
-        return ResponseEntity.ok(
-                ApiResponse.success("Photos retrieved successfully", photos)
-        );
+        Page<PhotoDTO> photos = photoService.getAllPhotos(pageable, userId);
+        return ResponseEntity.ok(ApiResponse.success("Photos retrieved successfully", photos));
     }
 
-    /**
-     * Update photo metadata (filename, EXIF, GPS)
-     * PUT /photos/{id}
-     */
     @PutMapping("/{id}")
     public ResponseEntity<ApiResponse<PhotoDTO>> updatePhoto(
             @PathVariable Long id,
-            @RequestBody UpdatePhotoRequest request) {
-        log.info("Updating photo with ID: {}", id);
-        PhotoDTO updated = photoService.updatePhoto(id, request);
-        return ResponseEntity.ok(
-                ApiResponse.success("Photo updated successfully", updated)
-        );
+            @RequestBody UpdatePhotoRequest request,
+            @CurrentUserId Long userId) {
+        PhotoDTO updated = photoService.updatePhoto(id, request, userId);
+        return ResponseEntity.ok(ApiResponse.success("Photo updated successfully", updated));
     }
 
-    /**
-     * Delete a photo and its file from disk
-     * DELETE /photos/{id}
-     */
     @DeleteMapping("/{id}")
-    public ResponseEntity<ApiResponse<Void>> deletePhoto(@PathVariable Long id) {
-        log.info("Deleting photo with ID: {}", id);
-        photoService.deletePhoto(id);
-        return ResponseEntity.ok(
-                ApiResponse.success("Photo deleted successfully")
-        );
+    public ResponseEntity<ApiResponse<Void>> deletePhoto(@PathVariable Long id,
+                                                         @CurrentUserId Long userId) {
+        photoService.deletePhoto(id, userId);
+        return ResponseEntity.ok(ApiResponse.success("Photo deleted successfully"));
     }
 
-    /**
-     * Add a manual tag to a photo
-     * POST /photos/{id}/tags
-     * Body: { "name": "...", "tagType": "CUSTOM" }
-     */
     @PostMapping("/{id}/tags")
     public ResponseEntity<ApiResponse<PhotoDTO>> addTag(
             @PathVariable Long id,
-            @RequestBody java.util.Map<String, String> body) {
+            @RequestBody java.util.Map<String, String> body,
+            @CurrentUserId Long userId) {
         String name    = body.get("name");
         String tagType = body.getOrDefault("tagType", "CUSTOM");
-        String source  = body.getOrDefault("source", "MANUAL");   // SYSTEM for auto-detected tags
-        log.info("Adding {} tag '{}' ({}) to photo {}", source, name, tagType, id);
-        PhotoDTO updated = photoService.addTag(id, name, tagType, source);
+        String source  = body.getOrDefault("source", "MANUAL");
+        PhotoDTO updated = photoService.addTag(id, name, tagType, source, userId);
         return ResponseEntity.ok(ApiResponse.success("Tag added", updated));
     }
 
     /**
-     * Remove a manual tag from a photo
-     * DELETE /photos/{id}/tags/{photoTagId}
+     * Copy a photo into the caller's own gallery.
+     * The file is shared; only DB rows are duplicated.
+     * Any tags the caller already added to the source photo travel to the copy.
      */
+    @PostMapping("/{id}/copy")
+    public ResponseEntity<ApiResponse<PhotoDTO>> copyPhoto(
+            @PathVariable Long id,
+            @CurrentUserId Long userId) {
+        PhotoDTO copy = photoService.copyPhoto(id, userId);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResponse.success("Photo copied to your gallery", copy));
+    }
+
     @DeleteMapping("/{id}/tags/{photoTagId}")
     public ResponseEntity<ApiResponse<PhotoDTO>> removeTag(
             @PathVariable Long id,
-            @PathVariable Long photoTagId) {
-        log.info("Removing tag {} from photo {}", photoTagId, id);
-        PhotoDTO updated = photoService.removeTag(id, photoTagId);
+            @PathVariable Long photoTagId,
+            @CurrentUserId Long userId) {
+        PhotoDTO updated = photoService.removeTag(id, photoTagId, userId);
         return ResponseEntity.ok(ApiResponse.success("Tag removed", updated));
     }
 }

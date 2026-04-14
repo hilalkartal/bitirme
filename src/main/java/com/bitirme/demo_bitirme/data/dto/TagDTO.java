@@ -14,4 +14,5 @@ public class TagDTO {
     private String name;
     private String tagType;
     private String source;
+    private Long userId;   // whose tag this is
 }

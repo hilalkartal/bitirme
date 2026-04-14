@@ -1,0 +1,399 @@
+databaseChangeLog:
+
+  # ─────────────────────────────────────────────────────────────
+  # 8. Users (called app_user to avoid MySQL reserved 'user')
+  # ─────────────────────────────────────────────────────────────
+  - changeSet:
+      id: 8
+      author: bitirme
+      comment: "Create app_user table - basic user identity for multi-user support (no auth yet)"
+      changes:
+        - createTable:
+            tableName: app_user
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: username
+                  type: VARCHAR(100)
+                  constraints:
+                    nullable: false
+                    unique: true
+              - column:
+                  name: display_name
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+
+  # ─────────────────────────────────────────────────────────────
+  # 9. Photo ownership
+  # ─────────────────────────────────────────────────────────────
+  - changeSet:
+      id: 9
+      author: bitirme
+      comment: "Add owner_user_id to photo"
+      changes:
+        - addColumn:
+            tableName: photo
+            columns:
+              - column:
+                  name: owner_user_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+        - addForeignKeyConstraint:
+            constraintName: fk_photo_owner
+            baseTableName: photo
+            baseColumnNames: owner_user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - createIndex:
+            indexName: idx_photo_owner_user_id
+            tableName: photo
+            columns:
+              - column:
+                  name: owner_user_id
+
+  # ─────────────────────────────────────────────────────────────
+  # 10. Tags become per-user
+  # ─────────────────────────────────────────────────────────────
+  - changeSet:
+      id: 10
+      author: bitirme
+      comment: "Make tags per-user: add user_id FK, replace unique constraint"
+      changes:
+        - addColumn:
+            tableName: tag
+            columns:
+              - column:
+                  name: user_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+        - addForeignKeyConstraint:
+            constraintName: fk_tag_user
+            baseTableName: tag
+            baseColumnNames: user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - dropUniqueConstraint:
+            tableName: tag
+            constraintName: uk_tag_name_type
+        - addUniqueConstraint:
+            tableName: tag
+            constraintName: uk_tag_name_type_user
+            columnNames: name,tag_type,source,user_id
+        - createIndex:
+            indexName: idx_tag_user_id
+            tableName: tag
+            columns:
+              - column:
+                  name: user_id
+
+  # ─────────────────────────────────────────────────────────────
+  # 11. Photo-tag link: who added it
+  # ─────────────────────────────────────────────────────────────
+  - changeSet:
+      id: 11
+      author: bitirme
+      comment: "Add added_by_user_id to photo_tag (same as tag.user_id, but makes queries fast)"
+      changes:
+        - addColumn:
+            tableName: photo_tag
+            columns:
+              - column:
+                  name: added_by_user_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+        - addForeignKeyConstraint:
+            constraintName: fk_photo_tag_user
+            baseTableName: photo_tag
+            baseColumnNames: added_by_user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - createIndex:
+            indexName: idx_photo_tag_added_by
+            tableName: photo_tag
+            columns:
+              - column:
+                  name: added_by_user_id
+
+  # ─────────────────────────────────────────────────────────────
+  # 12. Persons no longer have a globally-unique name
+  # ─────────────────────────────────────────────────────────────
+  - changeSet:
+      id: 12
+      author: bitirme
+      comment: "Drop unique constraint on persons.display_name (name becomes per-user via person_user_label)"
+      changes:
+        - dropUniqueConstraint:
+            tableName: persons
+            constraintName: uq_persons_display_name
+
+  # ─────────────────────────────────────────────────────────────
+  # 13. Per-user label for a face cluster
+  # ─────────────────────────────────────────────────────────────
+  - changeSet:
+      id: 13
+      author: bitirme
+      comment: "person_user_label: (person_id, user_id) -> this user's name for that face cluster"
+      changes:
+        - createTable:
+            tableName: person_user_label
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: person_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: user_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: label
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+        - addForeignKeyConstraint:
+            constraintName: fk_pul_person
+            baseTableName: person_user_label
+            baseColumnNames: person_id
+            referencedTableName: persons
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - addForeignKeyConstraint:
+            constraintName: fk_pul_user
+            baseTableName: person_user_label
+            baseColumnNames: user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - addUniqueConstraint:
+            constraintName: uq_pul_person_user
+            tableName: person_user_label
+            columnNames: person_id,user_id
+        - createIndex:
+            indexName: idx_pul_user_id
+            tableName: person_user_label
+            columns:
+              - column:
+                  name: user_id
+
+  # ─────────────────────────────────────────────────────────────
+  # 14. Albums
+  # ─────────────────────────────────────────────────────────────
+  - changeSet:
+      id: 14
+      author: bitirme
+      comment: "album table - owned by a user, PRIVATE or COLLABORATIVE"
+      changes:
+        - createTable:
+            tableName: album
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: name
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: description
+                  type: VARCHAR(1000)
+              - column:
+                  name: owner_user_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: album_type
+                  type: ENUM('PRIVATE', 'COLLABORATIVE')
+                  defaultValue: PRIVATE
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+        - sql:
+            sql: ALTER TABLE album MODIFY updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;
+        - addForeignKeyConstraint:
+            constraintName: fk_album_owner
+            baseTableName: album
+            baseColumnNames: owner_user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - createIndex:
+            indexName: idx_album_owner
+            tableName: album
+            columns:
+              - column:
+                  name: owner_user_id
+
+  # ─────────────────────────────────────────────────────────────
+  # 15. Album collaborators
+  # ─────────────────────────────────────────────────────────────
+  - changeSet:
+      id: 15
+      author: bitirme
+      comment: "album_collaborator - many-to-many between album and app_user"
+      changes:
+        - createTable:
+            tableName: album_collaborator
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: album_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: user_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: joined_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+        - addForeignKeyConstraint:
+            constraintName: fk_ac_album
+            baseTableName: album_collaborator
+            baseColumnNames: album_id
+            referencedTableName: album
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - addForeignKeyConstraint:
+            constraintName: fk_ac_user
+            baseTableName: album_collaborator
+            baseColumnNames: user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - addUniqueConstraint:
+            constraintName: uq_album_collaborator
+            tableName: album_collaborator
+            columnNames: album_id,user_id
+        - createIndex:
+            indexName: idx_ac_user_id
+            tableName: album_collaborator
+            columns:
+              - column:
+                  name: user_id
+
+  # ─────────────────────────────────────────────────────────────
+  # 16. Album photos
+  # ─────────────────────────────────────────────────────────────
+  - changeSet:
+      id: 16
+      author: bitirme
+      comment: "album_photo - links photos into albums; records who added them"
+      changes:
+        - createTable:
+            tableName: album_photo
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: album_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: photo_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: added_by_user_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: added_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+        - addForeignKeyConstraint:
+            constraintName: fk_ap_album
+            baseTableName: album_photo
+            baseColumnNames: album_id
+            referencedTableName: album
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - addForeignKeyConstraint:
+            constraintName: fk_ap_photo
+            baseTableName: album_photo
+            baseColumnNames: photo_id
+            referencedTableName: photo
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - addForeignKeyConstraint:
+            constraintName: fk_ap_user
+            baseTableName: album_photo
+            baseColumnNames: added_by_user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - addUniqueConstraint:
+            constraintName: uq_album_photo
+            tableName: album_photo
+            columnNames: album_id,photo_id
+        - createIndex:
+            indexName: idx_ap_album
+            tableName: album_photo
+            columns:
+              - column:
+                  name: album_id
+        - createIndex:
+            indexName: idx_ap_photo
+            tableName: album_photo
+            columns:
+              - column:
+                  name: photo_id

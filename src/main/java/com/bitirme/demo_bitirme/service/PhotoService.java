@@ -2,7 +2,6 @@ package com.bitirme.demo_bitirme.service;
 
 import com.bitirme.demo_bitirme.config.UploadConfig;
 import com.bitirme.demo_bitirme.data.dto.EXIFDataDTO;
-import com.bitirme.demo_bitirme.data.dto.GPSDataDTO;
 import com.bitirme.demo_bitirme.data.dto.PhotoDTO;
 import com.bitirme.demo_bitirme.data.dto.UpdatePhotoRequest;
 import com.bitirme.demo_bitirme.data.entity.*;
@@ -12,7 +11,6 @@ import com.bitirme.demo_bitirme.exception.ExifExtractionException;
 import com.bitirme.demo_bitirme.exception.FileStorageException;
 import com.bitirme.demo_bitirme.exception.PhotoNotFoundException;
 import com.bitirme.demo_bitirme.exception.PhotoUploadException;
-import com.bitirme.demo_bitirme.data.dto.PhotoTagDTO;
 import com.bitirme.demo_bitirme.repository.ExifDataRepository;
 import com.bitirme.demo_bitirme.repository.GpsDataRepository;
 import com.bitirme.demo_bitirme.repository.PhotoRepository;
@@ -40,7 +38,7 @@ import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 
 @Slf4j
@@ -59,12 +57,13 @@ public class PhotoService {
     private final ExifExtractor exifExtractor;
     private final ReverseGeocoder reverseGeocoder;
     private final PythonMLService pythonMLService;
+    private final UserService userService;
 
     /**
      * Upload a photo and extract EXIF/GPS metadata
      */
-    public PhotoDTO uploadPhoto(MultipartFile file) {
-        log.info("Starting photo upload: {}", file.getOriginalFilename());
+    public PhotoDTO uploadPhoto(MultipartFile file, Long ownerUserId) {
+        log.info("Starting photo upload: {} (owner={})", file.getOriginalFilename(), ownerUserId);
 
         try {
             // Validate file
@@ -85,6 +84,7 @@ public class PhotoService {
             Photo photo = new Photo();
             photo.setFileName(uniqueFileName);
             photo.setFilePath(uploadPath.toString());
+            photo.setOwner(userService.requireUser(ownerUserId));
             Photo savedPhoto = photoRepository.save(photo);
             log.debug("Photo entity saved with ID: {}", savedPhoto.getId());
 
@@ -104,9 +104,9 @@ public class PhotoService {
 
             // Trigger async ML analysis (person vs scenery → face tagging)
             // Runs in background — upload response is not delayed.
-            pythonMLService.analyzePhotoAsync(savedPhoto.getId(), uploadPath.toString());
+            pythonMLService.analyzePhotoAsync(savedPhoto.getId(), uploadPath.toString(), ownerUserId);
 
-            return photoMapper.toPhotoDTO(savedPhoto);
+            return toDTOForUser(savedPhoto, ownerUserId);
 
 
         } catch (PhotoUploadException | FileStorageException e) {
@@ -119,19 +119,42 @@ public class PhotoService {
     }
 
     /**
-     * Get photo by ID
+     * Get photo by ID. The caller must either own the photo, or be a collaborator
+     * on an album that contains it. Tag visibility is filtered to the caller's tags.
      */
-    public PhotoDTO getPhotoById(Long id) {
+    public PhotoDTO getPhotoById(Long id, Long userId) {
         Photo photo = photoRepository.findById(id)
                 .orElseThrow(() -> new PhotoNotFoundException("Photo not found with ID: " + id));
-        return photoMapper.toPhotoDTO(photo);
+        // NOTE: cross-user visibility (shared album) is enforced at the album endpoint level.
+        // Direct access to a photo URL is only allowed for the owner.
+        if (!photo.getOwner().getId().equals(userId)) {
+            throw new PhotoNotFoundException("Photo not found with ID: " + id);
+        }
+        return toDTOForUser(photo, userId);
     }
 
     /**
-     * Get all photos with pagination
+     * Get all photos owned by the current user, paginated.
      */
-    public Page<PhotoDTO> getAllPhotos(Pageable pageable) {
-        return photoRepository.findAll(pageable).map(photoMapper::toPhotoDTO);
+    public Page<PhotoDTO> getAllPhotos(Pageable pageable, Long userId) {
+        return photoRepository.findByOwnerId(userId, pageable)
+                .map(p -> toDTOForUser(p, userId));
+    }
+
+    /**
+     * Build a PhotoDTO that only shows the caller's own tags.
+     */
+    public PhotoDTO toDTOForUser(Photo photo, Long userId) {
+        PhotoDTO dto = photoMapper.toPhotoDTO(photo);
+        if (dto.getPhotoTags() != null && photo.getPhotoTags() != null) {
+            var filtered = photo.getPhotoTags().stream()
+                    .filter(pt -> pt.getAddedBy() != null
+                            && pt.getAddedBy().getId().equals(userId))
+                    .map(photoTagMapper::toPhotoTagDTO)
+                    .toList();
+            dto.setPhotoTags(filtered);
+        }
+        return dto;
     }
 
     /**
@@ -140,71 +163,84 @@ public class PhotoService {
      * Re-uses an existing tag row if one with the same name/type/source already exists.
      * Returns the updated photo.
      */
-    public PhotoDTO addTag(Long photoId, String tagName, String tagType, String source) {
+    /**
+     * Add a tag to a photo, attributed to a specific user. Tags are per-user.
+     */
+    public PhotoDTO addTag(Long photoId, String tagName, String tagType, String source, Long userId) {
         Photo photo = photoRepository.findById(photoId)
                 .orElseThrow(() -> new PhotoNotFoundException("Photo not found with ID: " + photoId));
 
         Tag.TagType type   = Tag.TagType.valueOf(tagType.toUpperCase());
         Tag.TagSource src  = Tag.TagSource.valueOf(source != null ? source.toUpperCase() : "MANUAL");
 
-        // Find or create the Tag row
+        com.bitirme.demo_bitirme.data.entity.AppUser tagOwner = userService.requireUser(userId);
+
+        // Find or create the Tag row for this user
         Tag tag = tagRepository
-                .findByNameAndTagTypeAndSource(tagName, type, src)
+                .findByNameAndTagTypeAndSourceAndUserId(tagName, type, src, userId)
                 .orElseGet(() -> {
                     Tag t = new Tag();
                     t.setName(tagName);
                     t.setTagType(type);
                     t.setSource(src);
+                    t.setUser(tagOwner);
                     return tagRepository.save(t);
                 });
 
         // Avoid duplicates on the same photo
         if (photoTagRepository.findByPhotoIdAndTagId(photoId, tag.getId()).isPresent()) {
-            log.debug("Tag '{}' already on photo {}", tagName, photoId);
-            return photoMapper.toPhotoDTO(photo);
+            log.debug("Tag '{}' already on photo {} for user {}", tagName, photoId, userId);
+            return toDTOForUser(photo, userId);
         }
 
         PhotoTag photoTag = new PhotoTag();
         photoTag.setPhoto(photo);
         photoTag.setTag(tag);
+        photoTag.setAddedBy(tagOwner);
         photoTag.setConfidenceScore(java.math.BigDecimal.ONE);
         photoTagRepository.save(photoTag);
 
-        log.info("Added {} tag '{}' ({}) to photo {}", src, tagName, tagType, photoId);
-        // Reload to get full associations
-        return photoMapper.toPhotoDTO(photoRepository.findById(photoId).orElseThrow());
+        log.info("Added {} tag '{}' ({}) to photo {} for user {}", src, tagName, tagType, photoId, userId);
+        return toDTOForUser(photoRepository.findById(photoId).orElseThrow(), userId);
     }
 
     /** Convenience overload for the manual-tag UI flow (source = MANUAL). */
-    public PhotoDTO addTag(Long photoId, String tagName, String tagType) {
-        return addTag(photoId, tagName, tagType, "MANUAL");
+    public PhotoDTO addTag(Long photoId, String tagName, String tagType, Long userId) {
+        return addTag(photoId, tagName, tagType, "MANUAL", userId);
     }
 
     /**
-     * Remove a tag link from a photo (by PhotoTag id).
-     * Both MANUAL and SYSTEM tags can be removed — system tags may be incorrect
-     * (e.g. a misidentified face or place) and users must be able to correct them.
+     * Remove a tag link from a photo. A user can only remove their own tags
+     * (both MANUAL and SYSTEM). System tags are removable because face/place
+     * detection may be wrong.
      */
-    public PhotoDTO removeTag(Long photoId, Long photoTagId) {
+    public PhotoDTO removeTag(Long photoId, Long photoTagId, Long userId) {
         PhotoTag photoTag = photoTagRepository.findById(photoTagId)
                 .orElseThrow(() -> new RuntimeException("PhotoTag not found: " + photoTagId));
 
         if (!photoTag.getPhoto().getId().equals(photoId)) {
             throw new RuntimeException("PhotoTag does not belong to photo " + photoId);
         }
+        if (photoTag.getAddedBy() == null || !photoTag.getAddedBy().getId().equals(userId)) {
+            throw new RuntimeException("You can only remove your own tags");
+        }
 
         photoTagRepository.delete(photoTag);
-        log.info("Removed tag {} (source: {}) from photo {}", photoTagId,
-                photoTag.getTag().getSource(), photoId);
-        return photoMapper.toPhotoDTO(photoRepository.findById(photoId).orElseThrow());
+        log.info("Removed tag {} (source: {}) from photo {} by user {}",
+                photoTagId, photoTag.getTag().getSource(), photoId, userId);
+        return toDTOForUser(photoRepository.findById(photoId).orElseThrow(), userId);
     }
 
     /**
-     * Delete a photo and its file from disk
+     * Delete a photo and its file from disk. Only the owner can delete.
      */
-    public void deletePhoto(Long id) {
+    public void deletePhoto(Long id, Long userId) {
         Photo photo = photoRepository.findById(id)
                 .orElseThrow(() -> new PhotoNotFoundException("Photo not found with ID: " + id));
+
+        if (!photo.getOwner().getId().equals(userId)) {
+            throw new PhotoNotFoundException("Photo not found with ID: " + id);
+        }
 
         // Delete physical file from disk
         try {
@@ -223,9 +259,13 @@ public class PhotoService {
      * Update a photo's filename, EXIF data, and/or GPS data.
      * Only non-null fields in the request are applied.
      */
-    public PhotoDTO updatePhoto(Long id, UpdatePhotoRequest req) {
+    public PhotoDTO updatePhoto(Long id, UpdatePhotoRequest req, Long userId) {
         Photo photo = photoRepository.findById(id)
                 .orElseThrow(() -> new PhotoNotFoundException("Photo not found with ID: " + id));
+
+        if (!photo.getOwner().getId().equals(userId)) {
+            throw new PhotoNotFoundException("Photo not found with ID: " + id);
+        }
 
         // ── Filename ──────────────────────────────────────────────────
         if (req.getFileName() != null && !req.getFileName().isBlank()) {
@@ -278,7 +318,86 @@ public class PhotoService {
 
         Photo saved = photoRepository.save(photo);
         log.info("Updated photo with ID: {}", id);
-        return photoMapper.toPhotoDTO(saved);
+        return toDTOForUser(saved, userId);
+    }
+
+    /**
+     * Copy a photo into the requesting user's own gallery.
+     * The underlying file is shared (no disk duplication); only DB rows are created.
+     * Any tags the caller already added to the source photo are copied to the new entry.
+     *
+     * @param sourcePhotoId the photo to copy
+     * @param userId        the user who wants the copy in their gallery
+     * @return the newly created PhotoDTO scoped to the caller's tags
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public PhotoDTO copyPhoto(Long sourcePhotoId, Long userId) {
+        Photo source = photoRepository.findById(sourcePhotoId)
+                .orElseThrow(() -> new PhotoNotFoundException("Photo not found: " + sourcePhotoId));
+
+        AppUser owner = userService.requireUser(userId);
+
+        // Don't create a duplicate if the user already owns this exact photo record
+        if (source.getOwner().getId().equals(userId)) {
+            return toDTOForUser(source, userId);
+        }
+
+        // ── Create new Photo row (same file, different owner) ──────────────
+        Photo copy = new Photo();
+        copy.setOwner(owner);
+        copy.setFileName(source.getFileName());
+        copy.setFilePath(source.getFilePath());   // shared file path — no disk I/O
+        Photo saved = photoRepository.save(copy);
+
+        // ── Copy ExifData ──────────────────────────────────────────────────
+        if (source.getExifData() != null) {
+            ExifData se = source.getExifData();
+            ExifData exif = new ExifData();
+            exif.setPhoto(saved);
+            exif.setCameraMake(se.getCameraMake());
+            exif.setCameraModel(se.getCameraModel());
+            exif.setIso(se.getIso());
+            exif.setAperture(se.getAperture());
+            exif.setExposureTime(se.getExposureTime());
+            exif.setFocalLength(se.getFocalLength());
+            exif.setDateTaken(se.getDateTaken());
+            exif.setOrientation(se.getOrientation());
+            exifDataRepository.save(exif);
+        }
+
+        // ── Copy GpsData ───────────────────────────────────────────────────
+        if (source.getGpsData() != null) {
+            GpsData sg = source.getGpsData();
+            GpsData gps = new GpsData();
+            gps.setPhoto(saved);
+            gps.setLatitude(sg.getLatitude());
+            gps.setLongitude(sg.getLongitude());
+            gps.setAltitude(sg.getAltitude());
+            gps.setCountry(sg.getCountry());
+            gps.setCity(sg.getCity());
+            gps.setGoogleMapsLink(sg.getGoogleMapsLink());
+            gpsDataRepository.save(gps);
+        }
+
+        // ── Copy caller's existing tags from the source photo ──────────────
+        List<PhotoTag> callerTags =
+                photoTagRepository.findByPhotoIdAndAddedByIdOrderByIdAsc(sourcePhotoId, userId);
+        for (PhotoTag pt : callerTags) {
+            PhotoTag newPt = new PhotoTag();
+            newPt.setPhoto(saved);
+            newPt.setTag(pt.getTag());        // same Tag entity (already scoped to this user)
+            newPt.setAddedBy(owner);
+            newPt.setConfidenceScore(pt.getConfidenceScore());
+            photoTagRepository.save(newPt);
+        }
+
+        log.info("User {} copied photo {} → new photo {}", userId, sourcePhotoId, saved.getId());
+
+        // Re-run the ML pipeline for the new owner so they get their own auto-tags
+        // (face/place detection runs asynchronously; existing manually-copied tags are already set above)
+        pythonMLService.analyzePhotoAsync(saved.getId(), saved.getFilePath(), userId);
+
+        return toDTOForUser(photoRepository.findById(saved.getId()).orElseThrow(), userId);
     }
 
     /**

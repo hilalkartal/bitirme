@@ -1,5 +1,6 @@
 package com.bitirme.demo_bitirme.controller;
 
+import com.bitirme.demo_bitirme.config.CurrentUserId;
 import com.bitirme.demo_bitirme.data.dto.TagDTO;
 import com.bitirme.demo_bitirme.data.entity.Tag;
 import com.bitirme.demo_bitirme.data.mapper.TagMapper;
@@ -8,10 +9,10 @@ import com.bitirme.demo_bitirme.service.PythonMLService;
 import com.bitirme.demo_bitirme.util.response.ApiResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
-import org.springframework.http.HttpStatus;
 
 import java.util.List;
 import java.util.Map;
@@ -27,14 +28,15 @@ public class TagController {
     private final PythonMLService pythonMLService;
 
     /**
-     * Rename a tag globally (affects all photos using this tag).
-     * PUT /tags/{tagId}
-     * Body: { "name": "new name" }
+     * Rename a tag. Users can only rename their own tags.
+     * For FACE tags, this rename is per-user only — it does not affect other users'
+     * labels for the same person (face cluster).
      */
     @PutMapping("/{tagId}")
     public ResponseEntity<ApiResponse<TagDTO>> renameTag(
             @PathVariable Long tagId,
-            @RequestBody Map<String, String> body) {
+            @RequestBody Map<String, String> body,
+            @CurrentUserId Long userId) {
 
         String newName = body.get("name");
         if (newName == null || newName.isBlank()) {
@@ -45,49 +47,49 @@ public class TagController {
         Tag tag = tagRepository.findById(tagId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tag not found: " + tagId));
 
-        // Check for name conflict: another tag with same (name, type, source) already exists
+        if (tag.getUser() == null || !tag.getUser().getId().equals(userId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You can only rename your own tags");
+        }
+
+        // Conflict check is scoped to this user
         String finalNewName = newName;
         boolean conflict = tagRepository
-                .findByNameAndTagTypeAndSource(newName, tag.getTagType(), tag.getSource())
+                .findByNameAndTagTypeAndSourceAndUserId(newName, tag.getTagType(), tag.getSource(), userId)
                 .filter(existing -> !existing.getId().equals(tagId))
                 .isPresent();
         if (conflict) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "A tag named '" + finalNewName + "' already exists for this type");
+                    "You already have a tag named '" + finalNewName + "' of this type");
         }
 
         String oldName = tag.getName();
         tag.setName(newName);
         Tag saved = tagRepository.save(tag);
-        log.info("Renamed tag {} from '{}' to '{}' (type={}, source={})",
-                tagId, oldName, newName, saved.getTagType(), saved.getSource());
+        log.info("User {} renamed tag {} from '{}' to '{}' (type={}, source={})",
+                userId, tagId, oldName, newName, saved.getTagType(), saved.getSource());
 
-        // If this is a FACE tag, keep Python's persons table in sync so that
-        // future uploads post the correct user-chosen name (e.g. "Selin")
-        // instead of the stale auto-generated name (e.g. "Person 2").
+        // For FACE tags, notify Python so its per-user label stays in sync
         if (saved.getTagType() == Tag.TagType.FACE) {
-            pythonMLService.renamePersonAsync(oldName, newName);
+            pythonMLService.renamePersonForUserAsync(oldName, newName, userId);
         }
 
         return ResponseEntity.ok(ApiResponse.success("Tag renamed", tagMapper.toTagDTO(saved)));
     }
 
     /**
-     * Search tags by partial name across all tag types.
-     * GET /tags/search?q=vol
-     * Returns results grouped (sorted) by tagType then name.
+     * Search the caller's tags by partial name.
      */
     @GetMapping("/search")
     public ResponseEntity<ApiResponse<List<TagDTO>>> search(
-            @RequestParam(name = "q", defaultValue = "") String q) {
+            @RequestParam(name = "q", defaultValue = "") String q,
+            @CurrentUserId Long userId) {
 
         if (q.isBlank() || q.length() < 2) {
             return ResponseEntity.ok(ApiResponse.success("No query", List.of()));
         }
 
-        log.debug("Tag search: '{}'", q);
         List<TagDTO> results = tagRepository
-                .findByNameContainingIgnoreCaseOrderByTagTypeAscNameAsc(q)
+                .findByUserIdAndNameContainingIgnoreCaseOrderByTagTypeAscNameAsc(userId, q)
                 .stream()
                 .map(tagMapper::toTagDTO)
                 .toList();
