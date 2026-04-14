@@ -182,7 +182,8 @@ public class PhotoService {
 
     /**
      * Remove a tag link from a photo (by PhotoTag id).
-     * Only MANUAL tags may be deleted this way.
+     * Both MANUAL and SYSTEM tags can be removed — system tags may be incorrect
+     * (e.g. a misidentified face or place) and users must be able to correct them.
      */
     public PhotoDTO removeTag(Long photoId, Long photoTagId) {
         PhotoTag photoTag = photoTagRepository.findById(photoTagId)
@@ -191,12 +192,10 @@ public class PhotoService {
         if (!photoTag.getPhoto().getId().equals(photoId)) {
             throw new RuntimeException("PhotoTag does not belong to photo " + photoId);
         }
-        if (photoTag.getTag().getSource() != Tag.TagSource.MANUAL) {
-            throw new RuntimeException("Only manually added tags can be removed");
-        }
 
         photoTagRepository.delete(photoTag);
-        log.info("Removed tag {} from photo {}", photoTagId, photoId);
+        log.info("Removed tag {} (source: {}) from photo {}", photoTagId,
+                photoTag.getTag().getSource(), photoId);
         return photoMapper.toPhotoDTO(photoRepository.findById(photoId).orElseThrow());
     }
 
