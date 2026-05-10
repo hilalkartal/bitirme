@@ -1,8 +1,10 @@
 package com.bitirme.demo_bitirme.controller;
 
 import com.bitirme.demo_bitirme.config.CurrentUserId;
+import com.bitirme.demo_bitirme.data.dto.DetectedLocationDTO;
 import com.bitirme.demo_bitirme.data.dto.PhotoDTO;
 import com.bitirme.demo_bitirme.data.dto.UpdatePhotoRequest;
+import com.bitirme.demo_bitirme.service.LandmarkDetectionService;
 import com.bitirme.demo_bitirme.service.PhotoService;
 import com.bitirme.demo_bitirme.util.response.ApiResponse;
 import lombok.RequiredArgsConstructor;
@@ -15,6 +17,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.List;
+
 @Slf4j
 @RestController
 @RequestMapping("/photos")
@@ -22,6 +26,7 @@ import org.springframework.web.multipart.MultipartFile;
 public class PhotoController {
 
     private final PhotoService photoService;
+    private final LandmarkDetectionService landmarkDetectionService;
 
     @PostMapping(value = "/upload", consumes = "multipart/form-data")
     public ResponseEntity<ApiResponse<Long>> uploadPhoto(@RequestParam("file") MultipartFile file,
@@ -90,6 +95,38 @@ public class PhotoController {
         PhotoDTO copy = photoService.copyPhoto(id, userId);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success("Photo copied to your gallery", copy));
+    }
+
+    /**
+     * Sends the photo's image to Google Cloud Vision Landmark Detection
+     * and returns a list of detected location candidates.
+     * The caller can then pick one and save it via PUT /photos/{id}.
+     */
+    @PostMapping("/{id}/detect-location")
+    public ResponseEntity<ApiResponse<List<DetectedLocationDTO>>> detectLocation(
+            @PathVariable Long id,
+            @CurrentUserId Long userId) {
+        try {
+            PhotoDTO photo = photoService.getPhotoById(id, userId);
+            List<DetectedLocationDTO> locations =
+                    landmarkDetectionService.detectLandmarks(photo.getFilePath());
+
+            if (locations.isEmpty()) {
+                return ResponseEntity.ok(
+                    ApiResponse.success("No landmarks detected in this photo", locations));
+            }
+            return ResponseEntity.ok(
+                ApiResponse.success("Locations detected", locations));
+
+        } catch (IllegalStateException e) {
+            // API key not configured
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(ApiResponse.error(e.getMessage()));
+        } catch (Exception e) {
+            log.error("Landmark detection failed for photo {}: {}", id, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(ApiResponse.error("Location detection failed: " + e.getMessage()));
+        }
     }
 
     @DeleteMapping("/{id}/tags/{photoTagId}")

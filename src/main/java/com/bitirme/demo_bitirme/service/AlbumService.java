@@ -12,7 +12,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -27,6 +29,7 @@ public class AlbumService {
     private final AlbumMapper albumMapper;
     private final UserService userService;
     private final PhotoService photoService;
+    private final PythonMLService pythonMLService;
 
     // ─── Album CRUD ──────────────────────────────────────────
 
@@ -105,6 +108,20 @@ public class AlbumService {
         ac.setUser(collaborator);
         collaboratorRepository.save(ac);
         log.info("User {} added {} as collaborator on album {}", userId, collaborator.getUsername(), albumId);
+
+        // Trigger ML for the new collaborator on all photos already in the album
+        // that they don't own (their own photos were already processed at upload time).
+        List<AlbumPhoto> existingPhotos = albumPhotoRepository.findByAlbumIdOrderByAddedAtDesc(albumId);
+        for (AlbumPhoto existingAp : existingPhotos) {
+            Photo existingPhoto = existingAp.getPhoto();
+            if (!existingPhoto.getOwner().getId().equals(collaborator.getId())) {
+                log.info("Triggering ML for new collaborator {} on existing photo {} in album {}",
+                        collaborator.getId(), existingPhoto.getId(), albumId);
+                pythonMLService.analyzePhotoAsync(
+                        existingPhoto.getId(), existingPhoto.getFilePath(), collaborator.getId());
+            }
+        }
+
         return albumMapper.toDTO(albumRepository.findById(albumId).orElseThrow());
     }
 
@@ -160,6 +177,14 @@ public class AlbumService {
         ap.setAddedBy(userService.requireUser(userId));
         AlbumPhoto saved = albumPhotoRepository.save(ap);
         log.info("User {} added photo {} to album {}", userId, photoId, albumId);
+
+        // For collaborative albums: the adder has already had this photo processed
+        // (it's their own photo). Fire ML analysis for every other album member so
+        // they each get their own face/scene tags on this photo.
+        if (album.getAlbumType() == Album.AlbumType.COLLABORATIVE) {
+            triggerMLForOtherMembers(album, photo, userId);
+        }
+
         AlbumPhotoDTO dto = albumMapper.toAlbumPhotoDTO(saved);
         dto.setPhoto(photoService.toDTOForUser(saved.getPhoto(), userId));
         return dto;
@@ -183,6 +208,26 @@ public class AlbumService {
     }
 
     // ─── Helpers ─────────────────────────────────────────────
+
+    /**
+     * For a collaborative album, fires async ML analysis for every member
+     * except the user who just added the photo ({@code adderUserId}).
+     * The adder already has the photo processed (it's their own upload).
+     * Each member gets their own independent FACE/PLACE/CAMERA tags.
+     */
+    private void triggerMLForOtherMembers(Album album, Photo photo, Long adderUserId) {
+        Set<Long> memberIds = new HashSet<>();
+        memberIds.add(album.getOwner().getId());
+        collaboratorRepository.findByAlbumId(album.getId())
+                .forEach(c -> memberIds.add(c.getUser().getId()));
+        memberIds.remove(adderUserId);
+
+        for (Long memberId : memberIds) {
+            log.info("Triggering ML for member {} on photo {} (album {})",
+                    memberId, photo.getId(), album.getId());
+            pythonMLService.analyzePhotoAsync(photo.getId(), photo.getFilePath(), memberId);
+        }
+    }
 
     private Album requireVisible(Long albumId, Long userId) {
         Album album = albumRepository.findById(albumId)
